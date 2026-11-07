@@ -1685,6 +1685,11 @@ void init_module(py::module_& m) {
         .def_readwrite("t_end",
                         &SimulationOptions::t_end)
         .def_readwrite("dt", &SimulationOptions::dt)
+        .def_readwrite("edge_fn", &SimulationOptions::edge_fn,
+                        "Exact gate edges: edge_fn(t0, t1) -> time of the "
+                        "first switch_fn edge strictly inside (t0, t1), "
+                        "or anything outside it when there is none. The "
+                        "fixed-step engine then splits a step at its edges.")
         .def_readwrite("store_every",
                         &SimulationOptions::store_every,
                         "Output decimation: record every m-th step "
@@ -1952,6 +1957,9 @@ void init_module(py::module_& m) {
             "Bytes held by the contiguous sample buffer.")
         .def_readonly("event_iteration_count",
                        &SimulationResult::event_iteration_count)
+        .def_readonly("edge_split_steps",
+                       &SimulationResult::edge_split_steps,
+                       "Steps split at gate edges (edge_fn set).")
         .def_readonly("commutation_events",
                        &SimulationResult::commutation_events)
         .def_readonly("inductor_guard_actions",

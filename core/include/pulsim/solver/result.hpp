@@ -202,6 +202,10 @@ struct SimulationResult {
     /// or no flips occurred.
     std::vector<CommutationEvent> commutation_events;
 
+    /// Steps split at gate edges because `opts.edge_fn` was set
+    /// (exact gate edges); 0 without it.
+    Size edge_split_steps = 0;
+
     [[nodiscard]] Size num_steps() const noexcept {
         return times.size();
     }

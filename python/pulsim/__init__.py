@@ -1477,6 +1477,7 @@ def simulate(
     on_cache=None,
     controller_period: Optional[float] = None,
     resume_from=None,
+    edge_fn: Optional[Callable[[float, float], float]] = None,
     # --- SolverOptions bundle (v1.5 Round 2 ergonomics polish) ---
     solver: Optional["SolverOptions"] = None,
 ) -> SimulationResult:
@@ -1743,6 +1744,10 @@ def simulate(
     # after the first applies to one engine only). Before this the
     # DSED engine silently ignored the snapshot and started at t = 0,
     # and an invalid snapshot resumed from zero.
+    if edge_fn is not None and engine in ("dsed", "trbdf2"):
+        raise ValueError(
+            f"simulate(engine={engine!r}): edge_fn (exact gate edges) "
+            "is a fixed-step option; use engine='pwl' with a dt.")
     if resume_from is not None:
         if not getattr(resume_from, "valid", False):
             raise ValueError(
@@ -1978,6 +1983,11 @@ def simulate(
                 + ". Use engine='auto' to route to the fixed-step "
                 "engine automatically, or engine='pwl' explicitly.")
 
+    if engine == "trbdf2" and edge_fn is not None:
+        raise ValueError(
+            "simulate(): edge_fn (exact gate edges) needs the fixed-step "
+            "engine, but no dt was given, so 'auto' picked the "
+            "variable-step one. Pass dt (and engine='pwl').")
     if engine == "trbdf2":
         # ---- v2.0 Phase 3: variable-step TR-BDF2 on the sparse
         #      MNA kernel. L-stable, LTE-controlled — no dt to
@@ -2412,6 +2422,8 @@ def simulate(
 
     # Construct options.
     opts = SimulationOptions(t_start=t_start, t_end=t_end, dt=dt)
+    if edge_fn is not None:
+        opts.edge_fn = edge_fn
     if store_every is not None and int(store_every) != 1:
         if int(store_every) < 1:
             raise ValueError(
@@ -3091,7 +3103,7 @@ def _auto_attach_motor_traces(
 # no separate Python-side params class — pass v_dc,
 # v_amplitude, frequency, phase as keyword args.
 
-__version__ = "2.0.0"
+__version__ = "2.0.0+exactedges"
 
 
 # ---------------------------------------------------------------------------

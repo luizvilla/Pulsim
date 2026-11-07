@@ -28,6 +28,10 @@
 // triangular solve on a cached factor). 1000 steps = ~ms total.
 // THE architecture that beats PSIM/PLECS.
 
+#include <algorithm>
+#include <array>
+#include <limits>
+
 #include "pulsim/numeric/dense.hpp"
 #include "pulsim/numeric/types.hpp"
 #include "pulsim/pwl/cache.hpp"
@@ -860,7 +864,10 @@ inline SimulationResult run_transient(
             // (v2.0 Phase 2, B.4) — the nominal `for_dt == opts.dt`
             // call still takes the cached factorization and is
             // bit-identical to before.
-            auto run_event_iteration = [&](Real at_t, Real for_dt) {
+            // mask_t: when to read switch_fn; the step's end by default (NaN), a
+            // part's midpoint when a step is split at gate edges.
+            auto run_event_iteration = [&](Real at_t, Real for_dt,
+                                           Real mask_t = std::numeric_limits<Real>::quiet_NaN()) {
             // Phase 4 C.1 — EVERY solve tells the nonlinear
             // refresh which step it is taking. This is the single
             // point all of them pass through, including the
@@ -886,7 +893,7 @@ inline SimulationResult run_transient(
             // (adversarial-review finding P0-R1).
             last_solved_bits.clear();
             do {
-                auto mask = switch_fn(at_t);
+                auto mask = switch_fn(std::isnan(mask_t) ? at_t : mask_t);
                 if (has_diodes) {
                     const auto diode_mask =
                         diodes.current_diode_mask();
@@ -983,7 +990,12 @@ inline SimulationResult run_transient(
             bool step_retried = false;
             mask_cycle = false;    // per OUTER step, not per sub-step
             try {
-                run_event_iteration(t, opts.dt);
+                // With exact gate edges, a step's mask is read at its
+                // midpoint: an edge on the grid then takes effect at
+                // that grid point, not one step early.
+                run_event_iteration(t, opts.dt,
+                    opts.edge_fn ? t_prev + Real{0.5} * opts.dt
+                                 : std::numeric_limits<Real>::quiet_NaN());
             } catch (const std::runtime_error& nominal_failed) {
                 // NOTE the narrow catch. Everything the solver throws
                 // is a runtime_error; a foreign exception is not.
@@ -1306,6 +1318,78 @@ inline SimulationResult run_transient(
                         // half above; this records dt2 as the final commit dt.
                         committed_dt = dt2;
                     }
+                }
+            }
+
+            // ---- Exact gate edges (opts.edge_fn) ----------------------
+            // A step containing gate edges is redone in parts split at
+            // them, each with the mask read at its midpoint. Right after
+            // an edge, the trapezoidal rule still averages in the inductor
+            // voltage of the old switch state over the first part, which
+            // delays the edge by half that part; a short part of dt/100
+            // follows every edge (including one exactly at t_prev) so the
+            // delay is the same tiny 0.5 % of dt for all edges, wherever
+            // they fall. Parts shorter than dt/1000 are merged (the trap
+            // companion's 2C/h is ill-conditioned at a vanishing h).
+            if (opts.edge_fn && !step_retried) {
+                const Real edge_min_dt = opts.dt * Real{1e-3};
+                const Real edge_settle_dt = opts.dt * Real{1e-2};
+                std::array<Real, 32> cuts{};
+                Size n_cuts = 0;
+                auto add_cut = [&](Real c) {
+                    if (c > t_prev + edge_min_dt && c < t - edge_min_dt &&
+                        (n_cuts == 0 || c > cuts[n_cuts - 1] + edge_min_dt) &&
+                        n_cuts < cuts.size()) {
+                        cuts[n_cuts++] = c;
+                    }
+                };
+                Real from = t_prev - edge_min_dt;
+                for (Size guard = 0; guard < 16; ++guard) {
+                    const Real e = opts.edge_fn(from, t - edge_min_dt);
+                    if (!(e > from) || !(e < t - edge_min_dt)) {
+                        break;
+                    }
+                    add_cut(e);
+                    add_cut(std::max(e, t_prev) + edge_settle_dt);
+                    from = e;
+                }
+                if (n_cuts > 0) {
+                    x = x_prev;
+                    history.restore(history_snap);
+                    coss_history.restore(coss_snap);
+                    laur_history.restore(laur_snap);
+                    pmsm_history.restore(pmsm_snap);
+                    tail_history.restore(tail_snap);
+                    sat_history.restore(sat_snap);
+                    if (has_diodes) {
+                        diodes.restore_on_bits(diodes_snap);
+                    }
+                    Real a_part = t_prev;
+                    for (Size i = 0; i <= n_cuts; ++i) {
+                        const Real b_part = i < n_cuts ? cuts[i] : t;
+                        const Real h = b_part - a_part;
+                        accumulate_b_extra(b_part, h);
+                        // Same solve + diode event iteration as a normal
+                        // step, at this part's length, with the gate
+                        // mask read at the part's midpoint.
+                        run_event_iteration(b_part, h, Real{0.5} * (a_part + b_part));
+                        if (i < n_cuts) {
+                            history.update_from_state(x, h);
+                            coss_history.update_from_state(x, h);
+                            laur_history.update_from_state(x, h);
+                            pmsm_history.update_from_state(x, h);
+                            tail_history.update_from_state(x, h);
+                            if (has_saturable) {
+                                sat_history.update_from_state(x);
+                            }
+                        } else {
+                            // The last part's commit is the deferred
+                            // one below, as for sub-step correction.
+                            committed_dt = h;
+                        }
+                        a_part = b_part;
+                    }
+                    ++result.edge_split_steps;
                 }
             }
 

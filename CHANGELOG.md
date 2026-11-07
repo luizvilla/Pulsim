@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `simulate(edge_fn=...)` / `SimulationOptions.edge_fn`: exact gate edges on the
+  fixed-step engine. `edge_fn(t0, t1)` returns the first switching edge of
+  `switch_fn` inside (t0, t1). A step containing edges is redone in parts split
+  at them, each with the normal solve and diode event iteration and the mask
+  read at the part's midpoint; a dt/100 part follows each edge so the
+  trapezoidal rule's half-part delay after a topology change is the same tiny
+  amount for every edge. Without it a PWM duty moves in steps of dt/T_pwm
+  (0.5 % at 25 ns and 200 kHz). Off by default: results without `edge_fn` are
+  unchanged. `SimulationResult.edge_split_steps` counts the split steps.
+
 ## [2.0.0] — 2026-09-08
 
 ### Release-readiness pass

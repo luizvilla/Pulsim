@@ -23,6 +23,7 @@
 #include "pulsim/numeric/types.hpp"
 
 #include <cmath>
+#include <functional>
 #include <string>
 
 namespace pulsim::solver {
@@ -230,6 +231,20 @@ struct SimulationOptions {
     /// Initial step-size for adaptive RK integrators (0 ⇒ auto
     /// via Hairer/Wanner heuristic). Ignored by `"kernel"`.
     Real dt_init = Real{0};
+
+    /// Exact gate edges for the fixed-step engine (optional).
+    ///
+    /// `edge_fn(t0, t1)` returns the time of the first switching
+    /// edge of `switch_fn` strictly inside (t0, t1), or any value
+    /// outside that interval (t1, +inf, NaN) when there is none.
+    /// Without it, `switch_fn(t)` at the END of a step decides the
+    /// mask for the whole step, so every gate edge moves to a step
+    /// boundary and a PWM duty can only change in steps of
+    /// dt / T_pwm (0.5 % at 25 ns and 200 kHz). With it, a step
+    /// that contains edges is split at them and each part is solved
+    /// with the mask at its midpoint, so the edges land exactly.
+    /// Each part runs the normal solve and diode event iteration.
+    std::function<Real(Real, Real)> edge_fn;
 
     [[nodiscard]] bool valid() const noexcept {
         // All three values must be finite (no NaN, no infinity).
